@@ -1,0 +1,130 @@
+// Prisma schema for VendorLens — Third-Party Vendor Risk Intelligence
+// Uses SQLite for zero-setup, single-file database
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A third-party vendor being monitored for security risk
+model Vendor {
+  id               String   @id @default(cuid())
+  name             String
+  domain           String   @unique
+  category         String   // Cloud, SaaS, Contractor, Payments, Healthcare, etc.
+  criticality      String   // Low, Medium, High
+  declaredProducts String   @default("") // Comma-separated products for CVE matching
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  scanResults      ScanResult[]
+  scoreHistory     ScoreHistory[]
+  alerts           Alert[]
+  remediationItems RemediationItem[]
+  findings         Finding[]
+}
+
+/// Result of a complete scan of a vendor
+model ScanResult {
+  id              String   @id @default(cuid())
+  vendorId        String
+  score           Int      // 0-100 (100 = lowest risk)
+  grade           String   // A, B, C, D, F
+  coveragePercent Float    // % of checks that returned usable data
+  riskTier        String   // Low, Medium, High, Critical
+  isFromCache     Boolean  @default(false)
+  cacheDate       String?  // Date string if cached
+  timestamp       DateTime @default(now())
+
+  vendor   Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  findings Finding[]
+
+  @@index([vendorId, timestamp])
+}
+
+/// Individual finding from a security check
+model Finding {
+  id             String   @id @default(cuid())
+  scanResultId   String
+  vendorId       String
+  checkName      String   // e.g., "DMARC Policy", "TLS Certificate Expiry"
+  category       String   // email_dns, transport, web_hardening, vulnerabilities, exposure
+  status         String   // PASS, FAIL, UNKNOWN
+  severity       String   // Critical, High, Medium, Low, Info
+  evidence       String   // Raw data/value found
+  sourceUrl      String   @default("") // URL or source reference
+  rawValue       String   @default("") // The actual raw value checked
+  timestamp      DateTime @default(now())
+  confidence     String   @default("High") // High, Medium, Low
+  whyItMatters   String   @default("")
+  recommendedFix String   @default("")
+
+  scanResult       ScanResult        @relation(fields: [scanResultId], references: [id], onDelete: Cascade)
+  vendor           Vendor            @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  remediationItems RemediationItem[]
+
+  @@index([vendorId])
+  @@index([scanResultId])
+}
+
+/// Historical score tracking for trend charts
+model ScoreHistory {
+  id          String   @id @default(cuid())
+  vendorId    String
+  score       Int
+  grade       String
+  coverage    Float    @default(100)
+  date        DateTime
+  isSynthetic Boolean  @default(false) // True for demo seed data
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId, date])
+}
+
+/// Alert triggered by significant security events
+model Alert {
+  id        String   @id @default(cuid())
+  vendorId  String
+  type      String   // SCORE_DROP, KEV_MATCH, CERT_EXPIRY
+  title     String
+  message   String
+  severity  String   @default("Medium") // Critical, High, Medium, Low
+  dismissed Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+  @@index([dismissed])
+}
+
+/// Action item for remediation tracking
+model RemediationItem {
+  id        String   @id @default(cuid())
+  findingId String
+  vendorId  String
+  priority  Float    // Computed: severity_weight * criticality_weight
+  status    String   @default("Open") // Open, In Review, Resolved
+  note      String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  finding Finding @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  vendor  Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+  @@index([status])
+}
+
+/// Cached scan snapshot for offline/demo mode
+model CachedSnapshot {
+  id         String   @id @default(cuid())
+  domain     String   @unique
+  data       String   // JSON blob of scan results
+  capturedAt DateTime @default(now())
+}
